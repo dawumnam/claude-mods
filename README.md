@@ -2,21 +2,23 @@
 
 [![test](https://github.com/dawumnam/claude-paste-file/actions/workflows/test.yml/badge.svg)](https://github.com/dawumnam/claude-paste-file/actions/workflows/test.yml)
 
-A mod for Claude Code that takes a file that you paste or drag into the prompt, copies it to a private temporary folder, and puts the path in the prompt. It also operates when Claude Code runs on a remote host through SSH: the file then comes from the computer that has your terminal.
+A mod for Claude Code that adds the `/paste-file` command. The command takes the files or the image that are on your clipboard, copies them to a private temporary folder, and puts the paths in the prompt. It also operates when Claude Code runs on a remote host through SSH: the clipboard then comes from the computer that has your terminal.
 
-Without the mod, a dragged file gives Claude Code a path on your computer. On a remote host that path does not exist, and the clipboard of your computer is out of reach.
+Without the mod, Claude Code on a remote host cannot reach the clipboard of your computer, and a path on your computer does not exist on the remote host.
 
 ## What it does
 
-- **Drag a file, or paste a path:** the mod copies the file to the paste folder and puts the path of the copy in the prompt. A file that is already in the working directory is not copied: its path becomes relative.
-- **`/paste-file [name for an image]`:** the mod takes the files that are on the clipboard (for example, files that you copied in Finder) or the image that is on the clipboard (for example, a screenshot).
+Copy one or more files in Finder, or take a screenshot to the clipboard. Then run `/paste-file` in Claude Code.
+
+- **Files on the clipboard:** the mod copies each file to the paste folder and puts the paths of the copies in the prompt. On macOS, a file that is already in the working directory is not copied: its path becomes relative.
+- **An image on the clipboard:** the mod saves it as a PNG. `/paste-file diagram` saves it as `diagram.png`.
 - The mod never overwrites a file. A different file with the same name gets a number in its name.
 - The mod does not copy folders or files larger than 200 MB.
 
 ## Requirements
 
 - Claude Code v2.1.287 or later, on macOS or Linux. A mod is a plugin with JavaScript hooks, and the mods API is early access, so an update of Claude Code can change it.
-- For the clipboard and for SSH: macOS on the computer that has your terminal.
+- macOS on the computer that has your terminal, because the mod reads the macOS clipboard.
 - For `plugin/allow-read.sh`: `python3`.
 
 ## Install
@@ -41,7 +43,7 @@ The paste folder is `claude-paste-file-<user id>` in `$TMPDIR`, or in `/tmp` whe
 
 ## Use it through SSH
 
-On a remote host, the dragged file and the clipboard are on the computer that has your terminal (the origin). The mod on the remote host gets them through a connection back to the origin:
+On a remote host, the clipboard and its files are on the computer that has your terminal (the origin). The mod on the remote host gets them through a connection back to the origin:
 
 ```text
 origin (your terminal)                      remote host (Claude Code)
@@ -102,8 +104,7 @@ plugin/allow-read.sh --remove
 | `Warning: remote port forwarding failed for listen port` | You have a second connection to the same host, and the first connection holds the return port. The warning does no harm. If you close the first connection, open a new one. |
 | `Not copied ... allowed_dirs` | The folder of the file is not in `~/.claude-paste-file/allowed_dirs` on the origin. Add the folder, or move the file. |
 | Claude asks a question before it reads a pasted file | Run `plugin/allow-read.sh` on the computer that runs Claude Code. |
-| A dragged file stays as its path and nothing is copied | Run `/plugin` and make sure that the line `1 mod active` shows `paste-file`. In an open session, run `/reload-plugins`. On a remote host, open a new SSH connection. |
-| You want to see what the mod receives | Make an empty file with the name `debug` in the paste folder and run `/reload-plugins`. The mod then writes each paste and its result to `debug.log` in that folder. Remove the two files when you have the answer, because the log holds the text that you paste. |
+| `/paste-file` is not in the list of commands | Run `/plugin` and make sure that the line `1 mod active` shows `paste-file`. In an open session, run `/reload-plugins`. |
 
 ## Development
 

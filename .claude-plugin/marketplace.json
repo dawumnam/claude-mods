@@ -9,7 +9,7 @@
     {
       "name": "paste-file",
       "source": "./plugin",
-      "description": "Copies a pasted or dragged file into a private temporary folder and puts the path in the prompt. Operates over SSH."
+      "description": "Adds /paste-file: copies the files or the image on the clipboard into a private temporary folder and puts the paths in the prompt. Operates over SSH."
     }
   ]
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.0 - 2026-11-18
+
+- Removed: the mod no longer changes a dragged file or a pasted path. Use `/paste-file`, which takes the files or the image that are on the clipboard.
+- Removed: the debug log, which was for the drag.
+
 ## 1.0.1 - 2026-11-18
 
 - When the origin does not connect, a drag now shows a message. Before, the path stayed in the prompt with no message.

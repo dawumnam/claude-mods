@@ -1,115 +1,42 @@
-// claude-paste-file: copies a pasted or dragged file into a private temporary
-// folder and puts the path in the prompt box.
+// paste-file: the /paste-file command copies the files or the image that are
+// on the clipboard into a private temporary folder and puts the paths in the
+// prompt box.
 //
 // The folder is claude-paste-file-<user id> in $TMPDIR, or in /tmp when that
 // variable is not set. Only your user can read it, and the operating system
 // deletes old files there.
 //
-// On a remote host, the file is on the computer that has your terminal (the
-// origin), not on the computer that runs Claude Code. The mod then gets the
-// file through the SSH host 'paste-origin'. origin/setup.sh makes that host.
+// On a remote host, the clipboard is on the computer that has your terminal
+// (the origin), not on the computer that runs Claude Code. The mod then gets
+// the clipboard through the SSH host 'paste-origin'. origin/setup.sh makes
+// that host.
 
-// A larger file is not copied. Its absolute path stays in the prompt.
+// A larger file is not copied.
 const MAX_BYTES = 200 * 1024 * 1024
-// A paste with more paths than this is not changed.
+// The command takes this many files from the clipboard at most.
 const MAX_PATHS = 20
 // The SSH host of the origin. The CLAUDE_PASTE_FILE_ORIGIN variable replaces it.
 const ORIGIN_HOST = 'paste-origin'
 const SSH_OPTIONS = '-o BatchMode=yes -o ConnectTimeout=5'
 
-// Prints the home directory, the origin and the paste folder. It makes the
-// paste folder for this user only, and it does not use a folder that a
-// different user made.
+// Prints the origin and the paste folder. It makes the paste folder for this
+// user only, and it does not use a folder that a different user made.
 const ENVIRONMENT_SCRIPT = [
-  'echo "home=$HOME"',
   'echo "origin=$CLAUDE_PASTE_FILE_ORIGIN"',
   'echo "configured=$(grep -Ecs "^[Hh]ost[[:space:]]+' + ORIGIN_HOST + '([[:space:]]|\\$)" "$HOME/.ssh/config")"',
   'd="${TMPDIR:-/tmp}"',
   'd="${d%/}/claude-paste-file-$(id -u)"',
   'mkdir -p -m 700 "$d" 2>/dev/null',
   '[ -d "$d" ] && [ -O "$d" ] && [ ! -L "$d" ] && chmod 700 "$d" && echo "dir=$d"',
-  '[ -e "$d/debug" ] && echo "debug=1"',
 ].join('\n')
-
-// Debug log. To set it to on, make an empty file with the name "debug" in
-// the paste folder, then run /reload-plugins. The mod then writes each paste
-// that it sees, and what it did with it, to "debug.log" in that folder.
-let debugFile = ''
-function debugLog($, text) {
-  if (debugFile === '') return
-  const line = new Date().toISOString() + ' ' + text
-  $.process.run(['sh', '-c', 'printf "%s\\n" "$1" >> "$2"', 'sh', line, debugFile]).catch(() => undefined)
-}
 
 let environment
 let originDownUntil = 0
-
-// Splits pasted text into paths as a shell does: spaces divide, and a
-// backslash or quotes keep a space in a path. Returns null for bad quotes.
-// Only the ASCII space, tab and line ends divide. A different space, such as
-// U+202F in the name of a macOS screenshot, is a part of the name.
-export function tokenize(raw) {
-  const tokens = []
-  let current = ''
-  let hasToken = false
-  let quote = ''
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw[i]
-    if (quote === "'") {
-      if (c === "'") quote = ''
-      else current += c
-    } else if (quote === '"') {
-      if (c === '"') quote = ''
-      else if (c === '\\' && (raw[i + 1] === '"' || raw[i + 1] === '\\')) current += raw[++i]
-      else current += c
-    } else if (c === "'" || c === '"') {
-      quote = c
-      hasToken = true
-    } else if (c === '\\' && i + 1 < raw.length) {
-      current += raw[++i]
-      hasToken = true
-    } else if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
-      if (hasToken) tokens.push(current)
-      current = ''
-      hasToken = false
-    } else {
-      current += c
-      hasToken = true
-    }
-  }
-  if (quote !== '') return null
-  if (hasToken) tokens.push(current)
-  return tokens
-}
-
-// Returns the absolute path that a token names, or undefined when the token
-// is not an absolute path, a ~/ path or a file:// URL.
-export function toAbsolute(token, homeDir) {
-  if (token.startsWith('file://')) {
-    const rest = token.slice(7).replace(/^localhost(?=\/)/, '')
-    if (!rest.startsWith('/')) return undefined
-    try {
-      return decodeURIComponent(rest)
-    } catch {
-      return undefined
-    }
-  }
-  if (token.startsWith('~/')) return homeDir ? homeDir + token.slice(1) : undefined
-  return token.startsWith('/') ? token : undefined
-}
 
 // Puts quotes around a path that has a space or another special character.
 export function quotePath(path) {
   if (/^[\w@%+=:,.\/-]+$/.test(path)) return path
   return '"' + path.replace(/(["\\])/g, '\\$1') + '"'
-}
-
-// True when the text can be a list of paths. This check is fast, because it
-// runs on each paste and on each burst of keys. An absolute path must have
-// two parts or more, as /tmp/a. Thus a slash command, as /help, is not a
-// path, and the mod does no work for it.
-export function looksLikePaths(text) {
-  return text.length > 1 && text.length <= 8192 && /^\s*['"]?(\/[^\/\s'"]+\/|~\/|file:\/\/)/.test(text)
 }
 
 // Encodes a path for a request to the origin. The result has only letters,
@@ -130,7 +57,7 @@ async function workingDirectory($) {
   return cwd.endsWith('/') ? cwd : cwd + '/'
 }
 
-// Returns { home, origin, pasteDir }.
+// Returns { origin, pasteDir }.
 // 'origin' is the SSH host of the origin, or '' when this computer has no
 // origin. A computer has an origin when origin/setup.sh added the host
 // 'paste-origin' to its ~/.ssh/config. The SSH_CONNECTION variable is not
@@ -146,20 +73,16 @@ async function readEnvironment($) {
     }
     const dir = value('dir')
     environment = {
-      home: value('home'),
       origin: value('origin') || (Number(value('configured')) > 0 ? ORIGIN_HOST : ''),
       pasteDir: dir === '' ? '' : dir + '/',
     }
-    if (dir !== '' && value('debug') === '1') debugFile = dir + '/debug.log'
-    debugLog($, 'environment ' + JSON.stringify(environment))
   }
   return environment
 }
 
 // Sends one request to the origin. With 'dest', the answer goes into that
 // file. Returns undefined when the origin is not available. After a failed
-// connection, the mod does not try again for 15 seconds, so that a paste
-// does not wait for the timeout each time.
+// connection, the mod does not try again for 15 seconds.
 async function askOrigin($, origin, request, dest) {
   if (Date.now() < originDownUntil) return undefined
   const script = 'exec ssh ' + SSH_OPTIONS + ' "$1" "$2"' + (dest === undefined ? '' : ' > "$3"')
@@ -202,16 +125,16 @@ async function settle($, pasteDir, source, name, place) {
   return undefined
 }
 
-// Gets a file from the origin. Returns the same shape as placePath.
+// Gets one file of the clipboard from the origin. Returns { text } with the
+// path of the copy, { refused: true } when the folder of the file is not in
+// the allow list of the origin, or undefined when the file cannot be copied.
 async function fetchFromOrigin($, pasteDir, origin, absolute) {
   const stat = await askOrigin($, origin, 'stat ' + encodeForOrigin(absolute))
-  debugLog($, 'origin stat ' + JSON.stringify(absolute) + ' -> ' + (stat === undefined ? 'no connection' : stat.exitCode + ' ' + JSON.stringify(stat.stdout.trim())))
   if (stat === undefined || stat.exitCode !== 0) return undefined
   const answer = stat.stdout.trim()
+  if (answer === 'refused') return { refused: true }
   const size = /^file (\d+)$/.exec(answer)
-  if (answer === 'dir' || (size && Number(size[1]) > MAX_BYTES)) return { text: absolute, changed: false }
-  if (answer === 'refused') return { text: absolute, changed: false, refused: true }
-  if (!size) return undefined
+  if (!size || Number(size[1]) > MAX_BYTES) return undefined
   if (!(await preparePasteDir($, pasteDir))) return undefined
   const temporary = pasteDir + '.claude-paste-file-' + Date.now() + '.part'
   const got = await askOrigin($, origin, 'get ' + encodeForOrigin(absolute), temporary)
@@ -222,58 +145,20 @@ async function fetchFromOrigin($, pasteDir, origin, absolute) {
     await $.process.run(['rm', '-f', temporary])
     return undefined
   }
-  return { text: target, changed: true, copied: true }
+  return { text: target }
 }
 
-// Returns the text to put in the prompt for one path, or undefined when the
-// path does not exist. 'changed' tells if the text is different from the path.
+// Copies one file of the clipboard of this computer. Returns { text } with
+// the path for the prompt, or undefined when the file cannot be copied.
 // A file in the working directory is not copied: its path becomes relative.
-// A file on this computer has priority over a file on the origin.
-async function placePath($, cwd, pasteDir, origin, absolute) {
+async function placeLocalFile($, cwd, pasteDir, absolute) {
   const stat = await $.fs.stat(absolute, { resolve: true }).catch(() => undefined)
-  if (!stat || !stat.realPath || stat.kind === 'other') {
-    return origin === '' ? undefined : fetchFromOrigin($, pasteDir, origin, absolute)
-  }
-  if (stat.realPath + '/' === cwd) return { text: '.', changed: true }
-  if (stat.realPath.startsWith(cwd)) return { text: './' + stat.realPath.slice(cwd.length), changed: true }
-  if (stat.kind !== 'file' || stat.size > MAX_BYTES) return { text: absolute, changed: false }
-  if (pasteDir !== '' && absolute.startsWith(pasteDir)) return { text: absolute, changed: false }
+  if (!stat || !stat.realPath || stat.kind !== 'file' || stat.size > MAX_BYTES) return undefined
+  if (stat.realPath.startsWith(cwd)) return { text: './' + stat.realPath.slice(cwd.length) }
+  if (absolute.startsWith(pasteDir)) return { text: absolute }
   if (!(await preparePasteDir($, pasteDir))) return undefined
   const target = await settle($, pasteDir, absolute, splitName(absolute).name, 'cp')
-  return target === undefined ? undefined : { text: target, changed: true, copied: true }
-}
-
-// Returns the pasted text with each path replaced, or undefined when the
-// paste must stay as it is.
-async function rewritePaste($, raw) {
-  const tokens = tokenize(raw.trim())
-  if (!tokens || tokens.length === 0 || tokens.length > MAX_PATHS) return undefined
-  const { home, origin, pasteDir } = await readEnvironment($)
-  const cwd = await workingDirectory($)
-  // Each token must be a path. This check comes before the work on the
-  // files, so text that only starts with a path costs nothing.
-  const paths = tokens.map(token => toAbsolute(token, home))
-  if (paths.includes(undefined)) return undefined
-  const parts = []
-  const copies = []
-  const refused = []
-  let changed = false
-  for (const absolute of paths) {
-    const placed = await placePath($, cwd, pasteDir, origin, absolute)
-    if (placed === undefined) {
-      // A silent failure looks like a mod that does nothing, so tell why.
-      if (origin !== '' && Date.now() < originDownUntil) $.ui.toast('Not copied: the SSH host ' + origin + ' does not connect. Open a new SSH connection from your computer, then drag the file again.', { timeoutMs: 8000 })
-      return undefined
-    }
-    parts.push(quotePath(placed.text))
-    changed = changed || placed.changed
-    if (placed.copied) copies.push(placed.text)
-    if (placed.refused) refused.push(absolute)
-  }
-  if (refused.length > 0) $.ui.toast('Not copied, because the folder is not in ~/.claude-paste-file/allowed_dirs on your computer: ' + refused.join(', '))
-  if (!changed) return undefined
-  if (copies.length > 0) $.ui.toast('Copied to ' + copies.join(', '))
-  return raw.match(/^\s*/)[0] + parts.join(' ') + raw.match(/\s*$/)[0]
+  return target === undefined ? undefined : { text: target }
 }
 
 function timestamp() {
@@ -351,19 +236,7 @@ async function saveLocalImage($, pasteDir, requestedName) {
 }
 
 export function register(on) {
-  // A paste or a dragged file arrives as one edit with no key.
-  on('prompt.edit', async ($, e, next) => {
-    if (debugFile !== '' && e.inputText.length > 1) debugLog($, 'edit key=' + (e.key !== undefined) + ' path=' + looksLikePaths(e.inputText) + ' text=' + JSON.stringify(e.inputText.slice(0, 400)))
-    if (e.key !== undefined || !looksLikePaths(e.inputText)) return next(e)
-    const inputText = await rewritePaste($, e.inputText)
-    debugLog($, 'result ' + JSON.stringify(inputText === undefined ? null : inputText.slice(0, 400)))
-    return next(inputText === undefined ? e : { ...e, inputText })
-  })
-
   on('session.start', async ($, e, next) => {
-    // The environment is read now, so that the debug log is on from the
-    // first paste.
-    await readEnvironment($).catch(() => undefined)
     try {
       await $.command.register({
         name: 'paste-file',
@@ -372,7 +245,7 @@ export function register(on) {
         immediate: true,
       })
     } catch {
-      // Another command has this name. The paste hook continues to work.
+      // Another command has this name.
     }
     return next(e)
   })
@@ -388,8 +261,8 @@ export function register(on) {
     const pasted = []
     const notes = []
     for (const path of await clipboardFiles($, origin, platform)) {
-      const placed = origin !== '' ? await fetchFromOrigin($, pasteDir, origin, path) : await placePath($, cwd, pasteDir, '', path)
-      if (placed && placed.changed) pasted.push(quotePath(placed.text))
+      const placed = origin !== '' ? await fetchFromOrigin($, pasteDir, origin, path) : await placeLocalFile($, cwd, pasteDir, path)
+      if (placed && placed.text) pasted.push(quotePath(placed.text))
       else if (placed && placed.refused) notes.push('Not copied: the folder of ' + path + ' is not in ~/.claude-paste-file/allowed_dirs on your computer.')
       else notes.push('Not copied: ' + path + ' is a folder, is too large, or cannot be read.')
     }
