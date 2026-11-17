@@ -1,6 +1,6 @@
 {
   "name": "paste-file",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Copies a pasted or dragged file into a private temporary folder and puts the path in the prompt. Adds /paste-file for a file or an image on the clipboard. Operates over SSH.",
   "author": {
     "name": "dawumnam",

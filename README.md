@@ -67,7 +67,7 @@ The setup needs no administrator rights, and you can run it again at any time. I
 | Remote host, `~/claude-paste-file/` | The mod, installed for your user |
 | Remote host, `~/.claude/settings.json` | The `Read` rule for the paste folder |
 
-The return port is 47000 plus the last three digits of your user id on the remote host, so two accounts on one machine get different ports. To set a different port, use the variable `CLAUDE_PASTE_FILE_REMOTE_PORT`.
+For a new host, the return port is 47000 plus the last three digits of your user id on the remote host, so two accounts on one machine get different ports. A host that has a setup keeps its port when you run the setup again, because the SSH connections that are open use that port. To set a different port, use the variable `CLAUDE_PASTE_FILE_REMOTE_PORT`, and then open new SSH connections.
 
 ## Security
 
@@ -102,7 +102,8 @@ plugin/allow-read.sh --remove
 | `Warning: remote port forwarding failed for listen port` | You have a second connection to the same host, and the first connection holds the return port. The warning does no harm. If you close the first connection, open a new one. |
 | `Not copied ... allowed_dirs` | The folder of the file is not in `~/.claude-paste-file/allowed_dirs` on the origin. Add the folder, or move the file. |
 | Claude asks a question before it reads a pasted file | Run `plugin/allow-read.sh` on the computer that runs Claude Code. |
-| A dragged file stays as its path and nothing is copied | Run `/plugin` and make sure that the line `1 mod active` shows `paste-file`. In an open session, run `/reload-plugins`. |
+| A dragged file stays as its path and nothing is copied | Run `/plugin` and make sure that the line `1 mod active` shows `paste-file`. In an open session, run `/reload-plugins`. On a remote host, open a new SSH connection. |
+| You want to see what the mod receives | Make an empty file with the name `debug` in the paste folder and run `/reload-plugins`. The mod then writes each paste and its result to `debug.log` in that folder. Remove the two files when you have the answer, because the log holds the text that you paste. |
 
 ## Development
 

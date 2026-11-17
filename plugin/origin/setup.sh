@@ -20,9 +20,10 @@
 #      permission rule for the paste folder (see allow-read.sh).
 #   8. Tests the connection from the remote host back to this computer.
 #
-# The return port is 47000 plus the last three digits of your user id on the
-# remote host, so two accounts on one machine get different ports. The
-# variable CLAUDE_PASTE_FILE_REMOTE_PORT sets a different port, and
+# For a new host, the return port is 47000 plus the last three digits of your
+# user id on the remote host, so two accounts on one machine get different
+# ports. A host that has a setup keeps its port. The variable
+# CLAUDE_PASTE_FILE_REMOTE_PORT sets a different port, and
 # CLAUDE_PASTE_FILE_LOCAL_PORT sets the port of the origin server (47823).
 set -euo pipefail
 
@@ -49,7 +50,13 @@ remote_uid=$(ssh "$host" 'id -u') || { echo "No SSH connection to $host." >&2; e
 case $remote_uid in
   '' | *[!0-9]*) echo "$host gave an unexpected answer: $remote_uid" >&2; exit 1 ;;
 esac
-remote_port=${CLAUDE_PASTE_FILE_REMOTE_PORT:-$((47000 + remote_uid % 1000))}
+# A host that has a setup keeps its return port, because the SSH connections
+# that are open now use that port.
+old_port=$(ssh "$host" "awk '/^Host paste-origin\$/ { found = 1; next } found && /^Host / { exit } found && \$1 == \"Port\" { print \$2; exit }' ~/.ssh/config 2>/dev/null" || true)
+case $old_port in
+  '' | *[!0-9]*) old_port=$((47000 + remote_uid % 1000)) ;;
+esac
+remote_port=${CLAUDE_PASTE_FILE_REMOTE_PORT:-$old_port}
 
 echo "2. Origin server on this computer (127.0.0.1:$local_port)"
 mkdir -p "$dir/bin" && chmod 700 "$dir"

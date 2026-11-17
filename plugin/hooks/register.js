@@ -28,13 +28,26 @@ const ENVIRONMENT_SCRIPT = [
   'd="${d%/}/claude-paste-file-$(id -u)"',
   'mkdir -p -m 700 "$d" 2>/dev/null',
   '[ -d "$d" ] && [ -O "$d" ] && [ ! -L "$d" ] && chmod 700 "$d" && echo "dir=$d"',
+  '[ -e "$d/debug" ] && echo "debug=1"',
 ].join('\n')
+
+// Debug log. To set it to on, make an empty file with the name "debug" in
+// the paste folder, then run /reload-plugins. The mod then writes each paste
+// that it sees, and what it did with it, to "debug.log" in that folder.
+let debugFile = ''
+function debugLog($, text) {
+  if (debugFile === '') return
+  const line = new Date().toISOString() + ' ' + text
+  $.process.run(['sh', '-c', 'printf "%s\\n" "$1" >> "$2"', 'sh', line, debugFile]).catch(() => undefined)
+}
 
 let environment
 let originDownUntil = 0
 
 // Splits pasted text into paths as a shell does: spaces divide, and a
 // backslash or quotes keep a space in a path. Returns null for bad quotes.
+// Only the ASCII space, tab and line ends divide. A different space, such as
+// U+202F in the name of a macOS screenshot, is a part of the name.
 export function tokenize(raw) {
   const tokens = []
   let current = ''
@@ -55,7 +68,7 @@ export function tokenize(raw) {
     } else if (c === '\\' && i + 1 < raw.length) {
       current += raw[++i]
       hasToken = true
-    } else if (/\s/.test(c)) {
+    } else if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
       if (hasToken) tokens.push(current)
       current = ''
       hasToken = false
@@ -137,6 +150,8 @@ async function readEnvironment($) {
       origin: value('origin') || (Number(value('configured')) > 0 ? ORIGIN_HOST : ''),
       pasteDir: dir === '' ? '' : dir + '/',
     }
+    if (dir !== '' && value('debug') === '1') debugFile = dir + '/debug.log'
+    debugLog($, 'environment ' + JSON.stringify(environment))
   }
   return environment
 }
@@ -190,6 +205,7 @@ async function settle($, pasteDir, source, name, place) {
 // Gets a file from the origin. Returns the same shape as placePath.
 async function fetchFromOrigin($, pasteDir, origin, absolute) {
   const stat = await askOrigin($, origin, 'stat ' + encodeForOrigin(absolute))
+  debugLog($, 'origin stat ' + JSON.stringify(absolute) + ' -> ' + (stat === undefined ? 'no connection' : stat.exitCode + ' ' + JSON.stringify(stat.stdout.trim())))
   if (stat === undefined || stat.exitCode !== 0) return undefined
   const answer = stat.stdout.trim()
   const size = /^file (\d+)$/.exec(answer)
@@ -244,7 +260,11 @@ async function rewritePaste($, raw) {
   let changed = false
   for (const absolute of paths) {
     const placed = await placePath($, cwd, pasteDir, origin, absolute)
-    if (placed === undefined) return undefined
+    if (placed === undefined) {
+      // A silent failure looks like a mod that does nothing, so tell why.
+      if (origin !== '' && Date.now() < originDownUntil) $.ui.toast('Not copied: the SSH host ' + origin + ' does not connect. Open a new SSH connection from your computer, then drag the file again.', { timeoutMs: 8000 })
+      return undefined
+    }
     parts.push(quotePath(placed.text))
     changed = changed || placed.changed
     if (placed.copied) copies.push(placed.text)
@@ -333,12 +353,17 @@ async function saveLocalImage($, pasteDir, requestedName) {
 export function register(on) {
   // A paste or a dragged file arrives as one edit with no key.
   on('prompt.edit', async ($, e, next) => {
+    if (debugFile !== '' && e.inputText.length > 1) debugLog($, 'edit key=' + (e.key !== undefined) + ' path=' + looksLikePaths(e.inputText) + ' text=' + JSON.stringify(e.inputText.slice(0, 400)))
     if (e.key !== undefined || !looksLikePaths(e.inputText)) return next(e)
     const inputText = await rewritePaste($, e.inputText)
+    debugLog($, 'result ' + JSON.stringify(inputText === undefined ? null : inputText.slice(0, 400)))
     return next(inputText === undefined ? e : { ...e, inputText })
   })
 
   on('session.start', async ($, e, next) => {
+    // The environment is read now, so that the debug log is on from the
+    // first paste.
+    await readEnvironment($).catch(() => undefined)
     try {
       await $.command.register({
         name: 'paste-file',

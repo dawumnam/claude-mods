@@ -5,6 +5,8 @@ test('tokenize splits paths as a shell does', async () => {
   expect(tokenize('/a/b.png /c/My\\ File.pdf')).toEqual(['/a/b.png', '/c/My File.pdf'])
   expect(tokenize("'/a/My File.png' \"/b/x y.txt\"")).toEqual(['/a/My File.png', '/b/x y.txt'])
   expect(tokenize("'/a/unterminated")).toBe(null)
+  // The name of a macOS screenshot has U+202F before AM or PM (u202f).
+  expect(tokenize('/a/Shot\\ at\\ 11.53.20\u202fPM.png')).toEqual(['/a/Shot at 11.53.20\u202fPM.png'])
 })
 
 test('toAbsolute accepts absolute paths, ~/ paths and file URLs only', async () => {
@@ -182,4 +184,19 @@ test('a file that the origin refuses stays as its path', async ($, on) => {
   stubSsh(on, runs, 'refused\n')
   expect((await $.prompt.edit(edit('/Users/me/.ssh/id_ed25519'))).text).toBe('see /Users/me/.ssh/id_ed25519')
   expect(runs.some(argv => (argv[5] ?? '').startsWith('get '))).toBe(false)
+})
+
+test('a drag tells the user when the origin does not connect', async ($, on) => {
+  const toasts: string[] = []
+  on('prompt.edit', (_: unknown, e: any) => ({ text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end), cursor: e.start + e.inputText.length }))
+  on('ui.toast', (_: unknown, e: any) => { toasts.push(String(e.text ?? e[0] ?? JSON.stringify(e))); return { value: undefined } })
+  on('fs.stat', (_: unknown, e: any) => {
+    if (e.path.startsWith('/Users/me/')) throw new Error('ENOENT')
+    return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: '/work' } }
+  })
+  on('process.run', (_: unknown, e: any) => ({ value: e.argv.length === 3
+    ? { exitCode: 0, stdout: 'home=/home/dev\norigin=\nconfigured=1\ndir=/tmp/cpf\n', stderr: '' }
+    : { exitCode: 255, stdout: '', stderr: 'Connection refused' } }))
+  expect((await $.prompt.edit(edit('/Users/me/Desktop/a.png'))).text).toBe('see /Users/me/Desktop/a.png')
+  expect(toasts.some(t => t.includes('does not connect'))).toBe(true)
 })
