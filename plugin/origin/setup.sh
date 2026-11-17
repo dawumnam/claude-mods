@@ -72,6 +72,8 @@ keydata=$(printf '%s\n' "$pub" | awk '{print $2}')
 grep -qF "$keydata" "$dir/authorized_keys" || printf 'restrict %s\n' "$pub" >> "$dir/authorized_keys"
 
 echo "5. Host paste-origin in ~/.ssh/config on $host (return port $remote_port)"
+# The variables in the block get their values on this computer.
+# shellcheck disable=SC2087
 ssh "$host" "bash ~/claude-paste-file/plugin/origin/ssh-block.sh ~/.ssh/config '$remote_marker'" <<EOF
 Host paste-origin
   HostName 127.0.0.1

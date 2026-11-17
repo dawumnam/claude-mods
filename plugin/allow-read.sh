@@ -24,7 +24,8 @@ command -v python3 >/dev/null || { echo "python3 is necessary to change ~/.claud
 dir="${TMPDIR:-/tmp}"
 dir="${dir%/}/claude-paste-file-$(id -u)"
 if [ "$mode" = add ]; then
-  mkdir -p -m 700 "$dir"
+  mkdir -p "$dir"
+  chmod 700 "$dir"
   real=$(cd "$dir" && pwd -P)
 else
   real=$( { cd "$dir" 2>/dev/null && pwd -P; } || echo "$dir")
