@@ -1,44 +1,61 @@
 #!/bin/bash
-# claude-paste-file origin daemon: an SSH server of your own user, for the claude-paste-file
-# mod on a remote host. It needs no administrator rights and no system setting.
+# claude-paste-file origin daemon: an SSH server of your own user, for the
+# paste-file mod on a remote host. It needs no administrator rights and no
+# system setting.
 #
-#   origind start [port]   starts the server and the clipboard agent if they
-#                          do not run (default port 47823)
-#   origind stop           stops the two
-#   origind status         tells if the two run
+#   origind start [port]     starts the server and the clipboard agent if
+#                            they do not run (default port 47823)
+#   origind restart [port]   stops the two, then starts them
+#   origind stop             stops the two
+#   origind status           tells if the two run
+#
+# setup.sh copies this program and serve.sh to ~/.claude-paste-file/bin, and
+# each SSH connection to a remote host starts it from there.
 #
 # The server listens on 127.0.0.1 only. It accepts the keys in
-# ~/.claude-paste-file/authorized_keys only, and each connection can run serve.sh
-# only: it reads files in the folders of ~/.claude-paste-file/allowed_dirs and the
-# clipboard image, and it gives no shell.
+# ~/.claude-paste-file/authorized_keys only, and each connection can run
+# serve.sh only: it reads files in the folders of
+# ~/.claude-paste-file/allowed_dirs and the clipboard, and it gives no shell.
 #
 # A connection of the server cannot read the macOS clipboard. The clipboard
 # agent can, because it starts from your terminal. serve.sh asks the agent
-# for the image through the pipe ~/.claude-paste-file/clip.req.
+# for the clipboard through the pipe ~/.claude-paste-file/clip.req.
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
 dir=${CLAUDE_PASTE_FILE_HOME:-$HOME/.claude-paste-file}
 
+# True when the process in the pid file '$1' runs and its command has the
+# text '$2'. The text check is necessary because a pid can go to a new process.
 alive() {
-  [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null
+  local pid
+  [ -f "$1" ] || return 1
+  pid=$(cat "$1")
+  kill -0 "$pid" 2>/dev/null || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -q -- "$2"
 }
 
-case ${1:-status} in
-  start)
-    port=${2:-47823}
-    mkdir -p "$dir" && chmod 700 "$dir" || exit 1
-    # The folders that a remote host can read files from. Edit this file to
-    # add or remove a folder. Each line is a real path.
-    [ -f "$dir/allowed_dirs" ] || printf '%s\n' "$HOME/Desktop" "$HOME/Downloads" "$HOME/Documents" "$HOME/Pictures" /private/var/folders /private/tmp > "$dir/allowed_dirs"
-    if ! alive "$dir/agent.pid"; then
-      CLAUDE_PASTE_FILE_HOME=$dir nohup "$here/origind" agent >/dev/null 2>&1 &
-    fi
-    alive "$dir/sshd.pid" && exit 0
-    sshd=$(command -v sshd || echo /usr/sbin/sshd)
-    [ -f "$dir/host_key" ] || ssh-keygen -q -t ed25519 -N "" -C claude-paste-file-origin -f "$dir/host_key" || exit 1
-    touch "$dir/authorized_keys" && chmod 600 "$dir/authorized_keys"
-    cat > "$dir/sshd_config" <<EOF
+stop_all() {
+  alive "$dir/sshd.pid" sshd && kill "$(cat "$dir/sshd.pid")"
+  alive "$dir/agent.pid" origind && kill "$(cat "$dir/agent.pid")"
+  rm -f "$dir/agent.pid"
+  return 0
+}
+
+start_all() {
+  local port=$1 sshd
+  mkdir -p "$dir" && chmod 700 "$dir" || exit 1
+  # The folders that a remote host can read files from. Edit this file to
+  # add or remove a folder. Each line is a real path.
+  [ -f "$dir/allowed_dirs" ] || printf '%s\n' "$HOME/Desktop" "$HOME/Downloads" "$HOME/Documents" "$HOME/Pictures" /private/var/folders /private/tmp > "$dir/allowed_dirs"
+  if ! alive "$dir/agent.pid" origind; then
+    CLAUDE_PASTE_FILE_HOME=$dir nohup "$here/origind" agent >/dev/null 2>&1 &
+  fi
+  alive "$dir/sshd.pid" sshd && return 0
+  sshd=$(command -v sshd || echo /usr/sbin/sshd)
+  [ -f "$dir/host_key" ] || ssh-keygen -q -t ed25519 -N "" -C claude-paste-file-origin -f "$dir/host_key" || exit 1
+  touch "$dir/authorized_keys" && chmod 600 "$dir/authorized_keys"
+  cat > "$dir/sshd_config" <<EOF
 Port $port
 ListenAddress 127.0.0.1
 HostKey $dir/host_key
@@ -55,7 +72,17 @@ AllowAgentForwarding no
 X11Forwarding no
 PermitTTY no
 EOF
-    "$sshd" -f "$dir/sshd_config" -E "$dir/sshd.log" || { echo "claude-paste-file: the origin server did not start. See $dir/sshd.log" >&2; exit 1; }
+  "$sshd" -f "$dir/sshd_config" -E "$dir/sshd.log" || { echo "claude-paste-file: the origin server did not start. See $dir/sshd.log" >&2; exit 1; }
+}
+
+case ${1:-status} in
+  start)
+    start_all "${2:-47823}"
+    ;;
+  restart)
+    stop_all
+    sleep 0.5
+    start_all "${2:-47823}"
     ;;
   agent)
     request=$dir/clip.req
@@ -107,18 +134,16 @@ APPLESCRIPT
     done
     ;;
   stop)
-    alive "$dir/sshd.pid" && kill "$(cat "$dir/sshd.pid")"
-    alive "$dir/agent.pid" && kill "$(cat "$dir/agent.pid")"
-    rm -f "$dir/agent.pid"
+    stop_all
     ;;
   status)
     code=0
-    if alive "$dir/sshd.pid"; then echo "server: runs"; else echo "server: does not run"; code=1; fi
-    if alive "$dir/agent.pid"; then echo "clipboard agent: runs"; else echo "clipboard agent: does not run"; code=1; fi
+    if alive "$dir/sshd.pid" sshd; then echo "server: runs"; else echo "server: does not run"; code=1; fi
+    if alive "$dir/agent.pid" origind; then echo "clipboard agent: runs"; else echo "clipboard agent: does not run"; code=1; fi
     exit $code
     ;;
   *)
-    echo "Usage: origind start [port] | stop | status" >&2
+    echo "Usage: origind start [port] | restart [port] | stop | status" >&2
     exit 2
     ;;
 esac

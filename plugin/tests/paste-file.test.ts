@@ -19,6 +19,10 @@ test('quotePath and looksLikePaths', async () => {
   expect(quotePath('./My File.png')).toBe('"./My File.png"')
   expect(looksLikePaths('/a/b.png ')).toBe(true)
   expect(looksLikePaths('fix /a/b.png')).toBe(false)
+  expect(looksLikePaths('/help')).toBe(false)
+  expect(looksLikePaths('/plugin install x')).toBe(false)
+  expect(looksLikePaths('~/a.png')).toBe(true)
+  expect(looksLikePaths('file:///a/b.png')).toBe(true)
 })
 
 const edit = (inputText: string) => ({ origin: { kind: 'composer' as const }, text: 'see ', cursor: 4, start: 4, end: 4, inputText })
@@ -157,4 +161,25 @@ test('/paste-file tells when the clipboard has no file and no image', async ($, 
   stubCommand(on, fills, {})
   const answer = await $.command.run({ command: 'paste-file', args: '' })
   expect(answer.text).toBe('The clipboard has no file and no image.')
+})
+
+test('a slash command is not a path, so the mod does no work for it', async ($, on) => {
+  const runs: string[][] = []
+  stubSsh(on, runs, 'missing\n')
+  expect((await $.prompt.edit(edit('/paste-file'))).text).toBe('see /paste-file')
+  expect(runs.length).toBe(0)
+})
+
+test('text that starts with a path but has other words costs no request to the origin', async ($, on) => {
+  const runs: string[][] = []
+  stubSsh(on, runs, 'file 10\n')
+  expect((await $.prompt.edit(edit('/Users/me/a.png is the wrong size'))).text).toBe('see /Users/me/a.png is the wrong size')
+  expect(runs.some(argv => (argv[5] ?? '').startsWith('stat '))).toBe(false)
+})
+
+test('a file that the origin refuses stays as its path', async ($, on) => {
+  const runs: string[][] = []
+  stubSsh(on, runs, 'refused\n')
+  expect((await $.prompt.edit(edit('/Users/me/.ssh/id_ed25519'))).text).toBe('see /Users/me/.ssh/id_ed25519')
+  expect(runs.some(argv => (argv[5] ?? '').startsWith('get '))).toBe(false)
 })

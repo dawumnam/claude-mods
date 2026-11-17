@@ -1,0 +1,39 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: shell (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell tests
+        run: bash plugin/tests/origin.test.sh
+      - name: ShellCheck
+        if: runner.os == 'Linux'
+        run: shellcheck --severity=warning plugin/allow-read.sh plugin/origin/origind plugin/origin/*.sh plugin/tests/origin.test.sh
+
+  mod:
+    name: mod
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Validate the plugin and the marketplace
+        run: claude plugin validate .
+      - name: Mod tests
+        run: cd plugin && claude plugin test

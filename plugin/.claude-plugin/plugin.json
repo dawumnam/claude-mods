@@ -1,5 +1,19 @@
 {
   "name": "paste-file",
-  "version": "0.1.0",
-  "description": "Copies a pasted or dragged file into a private temporary folder and puts the path in the prompt. Adds /paste-file for a file or an image on the clipboard. Operates over SSH."
+  "version": "1.0.0",
+  "description": "Copies a pasted or dragged file into a private temporary folder and puts the path in the prompt. Adds /paste-file for a file or an image on the clipboard. Operates over SSH.",
+  "author": {
+    "name": "dawumnam",
+    "url": "https://github.com/dawumnam"
+  },
+  "homepage": "https://github.com/dawumnam/claude-paste-file#readme",
+  "repository": "https://github.com/dawumnam/claude-paste-file",
+  "license": "MIT",
+  "keywords": [
+    "paste",
+    "clipboard",
+    "drag-and-drop",
+    "ssh",
+    "mod"
+  ]
 }

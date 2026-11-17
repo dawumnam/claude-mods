@@ -1,8 +1,9 @@
 {
   "name": "paste-file",
-  "description": "The claude-paste-file mod for Claude Code",
+  "description": "The paste-file mod for Claude Code",
   "owner": {
-    "name": "dawum"
+    "name": "dawumnam",
+    "url": "https://github.com/dawumnam"
   },
   "plugins": [
     {

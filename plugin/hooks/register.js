@@ -92,9 +92,11 @@ export function quotePath(path) {
 }
 
 // True when the text can be a list of paths. This check is fast, because it
-// runs on each paste and on each burst of keys.
+// runs on each paste and on each burst of keys. An absolute path must have
+// two parts or more, as /tmp/a. Thus a slash command, as /help, is not a
+// path, and the mod does no work for it.
 export function looksLikePaths(text) {
-  return text.length > 1 && text.length <= 8192 && /^\s*['"]?(\/|~\/|file:\/\/)/.test(text)
+  return text.length > 1 && text.length <= 8192 && /^\s*['"]?(\/[^\/\s'"]+\/|~\/|file:\/\/)/.test(text)
 }
 
 // Encodes a path for a request to the origin. The result has only letters,
@@ -141,7 +143,8 @@ async function readEnvironment($) {
 
 // Sends one request to the origin. With 'dest', the answer goes into that
 // file. Returns undefined when the origin is not available. After a failed
-// connection, the mod does not try again for one minute.
+// connection, the mod does not try again for 15 seconds, so that a paste
+// does not wait for the timeout each time.
 async function askOrigin($, origin, request, dest) {
   if (Date.now() < originDownUntil) return undefined
   const script = 'exec ssh ' + SSH_OPTIONS + ' "$1" "$2"' + (dest === undefined ? '' : ' > "$3"')
@@ -149,7 +152,7 @@ async function askOrigin($, origin, request, dest) {
   if (dest !== undefined) argv.push(dest)
   const result = await $.process.run(argv, { timeoutMs: 300000 }).catch(() => undefined)
   if (result === undefined || result.exitCode === 255) {
-    originDownUntil = Date.now() + 60000
+    originDownUntil = Date.now() + 15000
     return undefined
   }
   return result
@@ -231,13 +234,15 @@ async function rewritePaste($, raw) {
   if (!tokens || tokens.length === 0 || tokens.length > MAX_PATHS) return undefined
   const { home, origin, pasteDir } = await readEnvironment($)
   const cwd = await workingDirectory($)
+  // Each token must be a path. This check comes before the work on the
+  // files, so text that only starts with a path costs nothing.
+  const paths = tokens.map(token => toAbsolute(token, home))
+  if (paths.includes(undefined)) return undefined
   const parts = []
   const copies = []
   const refused = []
   let changed = false
-  for (const token of tokens) {
-    const absolute = toAbsolute(token, home)
-    if (absolute === undefined) return undefined
+  for (const absolute of paths) {
     const placed = await placePath($, cwd, pasteDir, origin, absolute)
     if (placed === undefined) return undefined
     parts.push(quotePath(placed.text))
@@ -370,7 +375,7 @@ export function register(on) {
     }
     if (pasted.length === 0) {
       if (notes.length > 0) return { text: notes.join('\n') }
-      if (origin !== '' && Date.now() < originDownUntil) return { text: 'The SSH host ' + origin + ' does not connect. Open a new SSH connection from your computer, then try again in one minute.' }
+      if (origin !== '' && Date.now() < originDownUntil) return { text: 'The SSH host ' + origin + ' does not connect. Open a new SSH connection from your computer, then try again.' }
       return { text: 'The clipboard has no file and no image.' }
     }
     const filled = await $.prompt.fill({ text: pasted.join(' ') + ' ', mode: 'insert' })
