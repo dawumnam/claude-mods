@@ -1,0 +1,14 @@
+{
+  "name": "claude-mods",
+  "description": "Local Claude Code mods",
+  "owner": {
+    "name": "dawum"
+  },
+  "plugins": [
+    {
+      "name": "paste-here",
+      "source": "./paste-here",
+      "description": "Copies a pasted or dragged file into the working directory and puts the relative path in the prompt. Operates over SSH."
+    }
+  ]
+}

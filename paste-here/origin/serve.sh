@@ -1,0 +1,93 @@
+#!/bin/bash
+# paste-here origin: answers the requests of the paste-here mod.
+#
+# This script runs on the computer that has your terminal. The origin server
+# (see origind) runs it as the forced command of each connection, so a
+# connection can do these three things only:
+#   stat <path>   prints "dir", "file <bytes>", "missing" or "refused"
+#   get <path>    writes the content of the file
+# stat and get refuse a file that is not in a folder of the allow list,
+# ~/.paste-here/allowed_dirs.
+#   clipboard        writes the clipboard image as a PNG (macOS)
+#   clipboard-files  prints the path of each file on the clipboard (macOS)
+# The path is percent-encoded.
+set -u
+
+dir=${1:-${PASTE_HERE_HOME:-$HOME/.paste-here}}
+request=${SSH_ORIGINAL_COMMAND:-}
+verb=${request%% *}
+encoded=""
+[ "$request" != "$verb" ] && encoded=${request#* }
+
+case $encoded in
+  *[!A-Za-z0-9%._~-]* | *%00*)
+    echo "paste-here: the path is not percent-encoded" >&2
+    exit 2
+    ;;
+esac
+path=$(printf '%b' "${encoded//%/\\x}")
+
+# Sets 'real' to the real path of the file. Returns 0 only when that path is
+# in a folder of the allow list (~/.paste-here/allowed_dirs). A symbolic link
+# that goes out of those folders is refused, because the real path is used.
+allowed() {
+  local line
+  real=$(realpath "$1" 2>/dev/null) || return 1
+  [ -f "$dir/allowed_dirs" ] || return 1
+  while IFS= read -r line; do
+    case $line in '' | '#'*) continue ;; esac
+    case $real in "${line%/}"/*) return 0 ;; esac
+  done < "$dir/allowed_dirs"
+  return 1
+}
+
+# Asks the clipboard agent for the clipboard, because this connection cannot
+# read it (see origind). '$1' is 'png' for the image or 'files' for the paths
+# of the files. The answer is in the file '$out'.
+ask_agent() {
+  local pipe=$dir/clip.req writer n=0
+  if ! { [ -p "$pipe" ] && [ -f "$dir/agent.pid" ] && kill -0 "$(cat "$dir/agent.pid")" 2>/dev/null; }; then
+    echo "paste-here: the clipboard agent does not run" >&2
+    return 1
+  fi
+  out=$dir/clip-$$.$1
+  trap 'rm -f "$out" "$out.status"' EXIT
+  ( echo "$1 $out" > "$pipe" ) &
+  writer=$!
+  while [ ! -f "$out.status" ] && [ $n -lt 100 ]; do
+    sleep 0.1
+    n=$((n + 1))
+  done
+  kill "$writer" 2>/dev/null
+  [ -f "$out.status" ] && [ "$(cat "$out.status")" = 0 ]
+}
+
+case $verb in
+  stat)
+    if [ -d "$path" ]; then
+      echo dir
+    elif [ ! -f "$path" ] || [ ! -r "$path" ]; then
+      echo missing
+    elif allowed "$path"; then
+      echo "file $(stat -L -f %z "$real" 2>/dev/null || stat -L -c %s "$real")"
+    else
+      echo refused
+    fi
+    ;;
+  get)
+    [ -f "$path" ] && allowed "$path" || exit 1
+    exec cat -- "$real"
+    ;;
+  clipboard)
+    ask_agent png || exit 1
+    cat "$out"
+    ;;
+  clipboard-files)
+    ask_agent files || exit 1
+    cat "$out"
+    ;;
+  *)
+    echo "paste-here: unknown request" >&2
+    exit 2
+    ;;
+esac

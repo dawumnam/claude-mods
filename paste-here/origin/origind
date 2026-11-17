@@ -1,0 +1,124 @@
+#!/bin/bash
+# paste-here origin daemon: an SSH server of your own user, for the paste-here
+# mod on a remote host. It needs no administrator rights and no system setting.
+#
+#   origind start [port]   starts the server and the clipboard agent if they
+#                          do not run (default port 47823)
+#   origind stop           stops the two
+#   origind status         tells if the two run
+#
+# The server listens on 127.0.0.1 only. It accepts the keys in
+# ~/.paste-here/authorized_keys only, and each connection can run serve.sh
+# only: it reads files in the folders of ~/.paste-here/allowed_dirs and the
+# clipboard image, and it gives no shell.
+#
+# A connection of the server cannot read the macOS clipboard. The clipboard
+# agent can, because it starts from your terminal. serve.sh asks the agent
+# for the image through the pipe ~/.paste-here/clip.req.
+set -u
+
+here=$(cd "$(dirname "$0")" && pwd)
+dir=${PASTE_HERE_HOME:-$HOME/.paste-here}
+
+alive() {
+  [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null
+}
+
+case ${1:-status} in
+  start)
+    port=${2:-47823}
+    mkdir -p "$dir" && chmod 700 "$dir" || exit 1
+    # The folders that a remote host can read files from. Edit this file to
+    # add or remove a folder. Each line is a real path.
+    [ -f "$dir/allowed_dirs" ] || printf '%s\n' "$HOME/Desktop" "$HOME/Downloads" "$HOME/Documents" "$HOME/Pictures" /private/var/folders /private/tmp > "$dir/allowed_dirs"
+    if ! alive "$dir/agent.pid"; then
+      PASTE_HERE_HOME=$dir nohup "$here/origind" agent >/dev/null 2>&1 &
+    fi
+    alive "$dir/sshd.pid" && exit 0
+    sshd=$(command -v sshd || echo /usr/sbin/sshd)
+    [ -f "$dir/host_key" ] || ssh-keygen -q -t ed25519 -N "" -C paste-here-origin -f "$dir/host_key" || exit 1
+    touch "$dir/authorized_keys" && chmod 600 "$dir/authorized_keys"
+    cat > "$dir/sshd_config" <<EOF
+Port $port
+ListenAddress 127.0.0.1
+HostKey $dir/host_key
+PidFile $dir/sshd.pid
+AuthorizedKeysFile $dir/authorized_keys
+AllowUsers $(id -un)
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM no
+ForceCommand "$here/serve.sh" "$dir"
+AllowTcpForwarding no
+AllowAgentForwarding no
+X11Forwarding no
+PermitTTY no
+EOF
+    "$sshd" -f "$dir/sshd_config" -E "$dir/sshd.log" || { echo "paste-here: the origin server did not start. See $dir/sshd.log" >&2; exit 1; }
+    ;;
+  agent)
+    request=$dir/clip.req
+    [ -p "$request" ] || { rm -f "$request"; mkfifo -m 600 "$request"; } || exit 1
+    echo $$ > "$dir/agent.pid"
+    while :; do
+      if IFS= read -r line < "$request"; then
+        kind=${line%% *}
+        out=${line#* }
+        case $out in
+          *..*) continue ;;
+          "$dir"/clip-*) ;;
+          *) continue ;;
+        esac
+        case $kind in
+          png)
+            osascript \
+              -e 'on run argv' \
+              -e 'set png to (the clipboard as «class PNGf»)' \
+              -e 'set f to open for access (POSIX file (item 1 of argv)) with write permission' \
+              -e 'set eof f to 0' \
+              -e 'write png to f' \
+              -e 'close access f' \
+              -e 'end run' "$out" >/dev/null 2>&1
+            code=$?
+            ;;
+          files)
+            # The path of each file on the clipboard, for example a file that
+            # was copied in Finder. One path on each line.
+            osascript - > "$out" 2>/dev/null <<'APPLESCRIPT'
+use framework "AppKit"
+use scripting additions
+set pb to current application's NSPasteboard's generalPasteboard()
+set urls to pb's readObjectsForClasses:{current application's NSURL} options:{NSPasteboardURLReadingFileURLsOnly:true}
+if urls is missing value then return ""
+set out to ""
+repeat with i from 1 to (urls's |count|())
+	set out to out & (((urls's objectAtIndex:(i - 1))'s |path|()) as text) & linefeed
+end repeat
+return out
+APPLESCRIPT
+            grep -q '^/' "$out"
+            code=$?
+            ;;
+          *) continue ;;
+        esac
+        echo $code > "$out.status.tmp" && mv "$out.status.tmp" "$out.status"
+      fi
+    done
+    ;;
+  stop)
+    alive "$dir/sshd.pid" && kill "$(cat "$dir/sshd.pid")"
+    alive "$dir/agent.pid" && kill "$(cat "$dir/agent.pid")"
+    rm -f "$dir/agent.pid"
+    ;;
+  status)
+    code=0
+    if alive "$dir/sshd.pid"; then echo "server: runs"; else echo "server: does not run"; code=1; fi
+    if alive "$dir/agent.pid"; then echo "clipboard agent: runs"; else echo "clipboard agent: does not run"; code=1; fi
+    exit $code
+    ;;
+  *)
+    echo "Usage: origind start [port] | stop | status" >&2
+    exit 2
+    ;;
+esac
