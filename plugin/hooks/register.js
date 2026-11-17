@@ -1,20 +1,34 @@
-// paste-here: copies a pasted or dragged file into the working directory and
-// puts the relative path in the prompt box.
+// claude-paste-file: copies a pasted or dragged file into a private temporary
+// folder and puts the path in the prompt box.
+//
+// The folder is claude-paste-file-<user id> in $TMPDIR, or in /tmp when that
+// variable is not set. Only your user can read it, and the operating system
+// deletes old files there.
 //
 // On a remote host, the file is on the computer that has your terminal (the
 // origin), not on the computer that runs Claude Code. The mod then gets the
 // file through the SSH host 'paste-origin'. origin/setup.sh makes that host.
 
-// The folder that receives the copies, relative to the working directory.
-// '' is the working directory itself. 'attachments' is a folder in it.
-const TARGET_DIR = ''
 // A larger file is not copied. Its absolute path stays in the prompt.
 const MAX_BYTES = 200 * 1024 * 1024
 // A paste with more paths than this is not changed.
 const MAX_PATHS = 20
-// The SSH host of the origin. The PASTE_HERE_ORIGIN variable replaces it.
+// The SSH host of the origin. The CLAUDE_PASTE_FILE_ORIGIN variable replaces it.
 const ORIGIN_HOST = 'paste-origin'
 const SSH_OPTIONS = '-o BatchMode=yes -o ConnectTimeout=5'
+
+// Prints the home directory, the origin and the paste folder. It makes the
+// paste folder for this user only, and it does not use a folder that a
+// different user made.
+const ENVIRONMENT_SCRIPT = [
+  'echo "home=$HOME"',
+  'echo "origin=$CLAUDE_PASTE_FILE_ORIGIN"',
+  'echo "configured=$(grep -Ecs "^[Hh]ost[[:space:]]+' + ORIGIN_HOST + '([[:space:]]|\\$)" "$HOME/.ssh/config")"',
+  'd="${TMPDIR:-/tmp}"',
+  'd="${d%/}/claude-paste-file-$(id -u)"',
+  'mkdir -p -m 700 "$d" 2>/dev/null',
+  '[ -d "$d" ] && [ -O "$d" ] && [ ! -L "$d" ] && chmod 700 "$d" && echo "dir=$d"',
+].join('\n')
 
 let environment
 let originDownUntil = 0
@@ -101,17 +115,26 @@ async function workingDirectory($) {
   return cwd.endsWith('/') ? cwd : cwd + '/'
 }
 
-// Returns { home, origin }. 'origin' is the SSH host of the origin, or '' when
-// this computer has no origin. A computer has an origin when origin/setup.sh
-// added the host 'paste-origin' to its ~/.ssh/config. The SSH_CONNECTION
-// variable is not used, because a session in tmux or a background session
-// does not have it.
+// Returns { home, origin, pasteDir }.
+// 'origin' is the SSH host of the origin, or '' when this computer has no
+// origin. A computer has an origin when origin/setup.sh added the host
+// 'paste-origin' to its ~/.ssh/config. The SSH_CONNECTION variable is not
+// used, because a session in tmux or a background session does not have it.
+// 'pasteDir' is the paste folder with a slash at its end, or '' when the
+// folder is not available.
 async function readEnvironment($) {
   if (environment === undefined) {
-    const script = 'printf "%s\\n%s\\n" "$HOME" "$PASTE_HERE_ORIGIN"; grep -Ecs "^[Hh]ost[[:space:]]+' + ORIGIN_HOST + '([[:space:]]|\$)" "$HOME/.ssh/config"'
-    const result = await $.process.run(['sh', '-c', script])
-    const [home = '', named = '', configured = ''] = result.stdout.split('\n')
-    environment = { home, origin: named || (Number(configured) > 0 ? ORIGIN_HOST : '') }
+    const result = await $.process.run(['sh', '-c', ENVIRONMENT_SCRIPT])
+    const value = key => {
+      const line = result.stdout.split('\n').find(l => l.startsWith(key + '='))
+      return line === undefined ? '' : line.slice(key.length + 1)
+    }
+    const dir = value('dir')
+    environment = {
+      home: value('home'),
+      origin: value('origin') || (Number(value('configured')) > 0 ? ORIGIN_HOST : ''),
+      pasteDir: dir === '' ? '' : dir + '/',
+    }
   }
   return environment
 }
@@ -132,37 +155,37 @@ async function askOrigin($, origin, request, dest) {
   return result
 }
 
-// Makes the target folder. Returns its path relative to the working
-// directory ('' or a path with a slash at its end), or undefined on failure.
-async function targetFolder($, cwd) {
-  if (TARGET_DIR === '') return ''
-  const made = await $.process.run(['mkdir', '-p', cwd + TARGET_DIR])
-  return made.exitCode === 0 ? TARGET_DIR + '/' : undefined
+// Makes sure that the paste folder exists, because the operating system can
+// delete it. Returns false when the folder is not available.
+async function preparePasteDir($, pasteDir) {
+  if (pasteDir === '') return false
+  const made = await $.process.run(['mkdir', '-p', '-m', '700', pasteDir])
+  return made.exitCode === 0
 }
 
-// Puts the file 'source' in the working directory under 'name'. 'place' is
-// 'cp' for a file that must stay where it is and 'mv' for a temporary file.
+// Puts the file 'source' in the paste folder under 'name'. 'place' is 'cp'
+// for a file that must stay where it is and 'mv' for a temporary file.
 // A file with the same name and the same content is used again. A file with
 // the same name and different content stays, and the new file gets a number.
-// Returns the relative path, or undefined on failure.
-async function settle($, cwd, folder, source, name, place) {
+// Returns the absolute path, or undefined on failure.
+async function settle($, pasteDir, source, name, place) {
   const { stem, ext } = splitName(name)
   for (let n = 0; n < 100; n++) {
-    const relative = folder + (n === 0 ? name : stem + '-' + n + ext)
-    if (await $.fs.exists(cwd + relative)) {
-      const same = await $.process.run(['cmp', '-s', source, cwd + relative], { timeoutMs: 120000 })
+    const target = pasteDir + (n === 0 ? name : stem + '-' + n + ext)
+    if (await $.fs.exists(target)) {
+      const same = await $.process.run(['cmp', '-s', source, target], { timeoutMs: 120000 })
       if (same.exitCode !== 0) continue
       if (place === 'mv') await $.process.run(['rm', '-f', source])
-      return './' + relative
+      return target
     }
-    const placed = await $.process.run([place, source, cwd + relative], { timeoutMs: 120000 })
-    return placed.exitCode === 0 ? './' + relative : undefined
+    const placed = await $.process.run([place, source, target], { timeoutMs: 120000 })
+    return placed.exitCode === 0 ? target : undefined
   }
   return undefined
 }
 
 // Gets a file from the origin. Returns the same shape as placePath.
-async function fetchFromOrigin($, cwd, origin, absolute) {
+async function fetchFromOrigin($, pasteDir, origin, absolute) {
   const stat = await askOrigin($, origin, 'stat ' + encodeForOrigin(absolute))
   if (stat === undefined || stat.exitCode !== 0) return undefined
   const answer = stat.stdout.trim()
@@ -170,35 +193,35 @@ async function fetchFromOrigin($, cwd, origin, absolute) {
   if (answer === 'dir' || (size && Number(size[1]) > MAX_BYTES)) return { text: absolute, changed: false }
   if (answer === 'refused') return { text: absolute, changed: false, refused: true }
   if (!size) return undefined
-  const folder = await targetFolder($, cwd)
-  if (folder === undefined) return undefined
-  const temporary = cwd + folder + '.paste-here-' + Date.now() + '.part'
+  if (!(await preparePasteDir($, pasteDir))) return undefined
+  const temporary = pasteDir + '.claude-paste-file-' + Date.now() + '.part'
   const got = await askOrigin($, origin, 'get ' + encodeForOrigin(absolute), temporary)
-  const relative = got !== undefined && got.exitCode === 0
-    ? await settle($, cwd, folder, temporary, splitName(absolute).name, 'mv')
+  const target = got !== undefined && got.exitCode === 0
+    ? await settle($, pasteDir, temporary, splitName(absolute).name, 'mv')
     : undefined
-  if (relative === undefined) {
+  if (target === undefined) {
     await $.process.run(['rm', '-f', temporary])
     return undefined
   }
-  return { text: relative, changed: true, copied: true }
+  return { text: target, changed: true, copied: true }
 }
 
 // Returns the text to put in the prompt for one path, or undefined when the
 // path does not exist. 'changed' tells if the text is different from the path.
+// A file in the working directory is not copied: its path becomes relative.
 // A file on this computer has priority over a file on the origin.
-async function placePath($, cwd, origin, absolute) {
+async function placePath($, cwd, pasteDir, origin, absolute) {
   const stat = await $.fs.stat(absolute, { resolve: true }).catch(() => undefined)
   if (!stat || !stat.realPath || stat.kind === 'other') {
-    return origin === '' ? undefined : fetchFromOrigin($, cwd, origin, absolute)
+    return origin === '' ? undefined : fetchFromOrigin($, pasteDir, origin, absolute)
   }
   if (stat.realPath + '/' === cwd) return { text: '.', changed: true }
   if (stat.realPath.startsWith(cwd)) return { text: './' + stat.realPath.slice(cwd.length), changed: true }
   if (stat.kind !== 'file' || stat.size > MAX_BYTES) return { text: absolute, changed: false }
-  const folder = await targetFolder($, cwd)
-  if (folder === undefined) return undefined
-  const relative = await settle($, cwd, folder, absolute, splitName(absolute).name, 'cp')
-  return relative === undefined ? undefined : { text: relative, changed: true, copied: true }
+  if (pasteDir !== '' && absolute.startsWith(pasteDir)) return { text: absolute, changed: false }
+  if (!(await preparePasteDir($, pasteDir))) return undefined
+  const target = await settle($, pasteDir, absolute, splitName(absolute).name, 'cp')
+  return target === undefined ? undefined : { text: target, changed: true, copied: true }
 }
 
 // Returns the pasted text with each path replaced, or undefined when the
@@ -206,7 +229,7 @@ async function placePath($, cwd, origin, absolute) {
 async function rewritePaste($, raw) {
   const tokens = tokenize(raw.trim())
   if (!tokens || tokens.length === 0 || tokens.length > MAX_PATHS) return undefined
-  const { home, origin } = await readEnvironment($)
+  const { home, origin, pasteDir } = await readEnvironment($)
   const cwd = await workingDirectory($)
   const parts = []
   const copies = []
@@ -215,14 +238,14 @@ async function rewritePaste($, raw) {
   for (const token of tokens) {
     const absolute = toAbsolute(token, home)
     if (absolute === undefined) return undefined
-    const placed = await placePath($, cwd, origin, absolute)
+    const placed = await placePath($, cwd, pasteDir, origin, absolute)
     if (placed === undefined) return undefined
     parts.push(quotePath(placed.text))
     changed = changed || placed.changed
     if (placed.copied) copies.push(placed.text)
     if (placed.refused) refused.push(absolute)
   }
-  if (refused.length > 0) $.ui.toast('Not copied, because the folder is not in ~/.paste-here/allowed_dirs on your computer: ' + refused.join(', '))
+  if (refused.length > 0) $.ui.toast('Not copied, because the folder is not in ~/.claude-paste-file/allowed_dirs on your computer: ' + refused.join(', '))
   if (!changed) return undefined
   if (copies.length > 0) $.ui.toast('Copied to ' + copies.join(', '))
   return raw.match(/^\s*/)[0] + parts.join(' ') + raw.match(/\s*$/)[0]
@@ -234,26 +257,26 @@ function timestamp() {
   return d.getFullYear() + two(d.getMonth() + 1) + two(d.getDate()) + '-' + two(d.getHours()) + two(d.getMinutes()) + two(d.getSeconds())
 }
 
-// Returns a relative path for the clipboard image that no file has.
-async function clipboardTarget($, cwd, requestedName) {
-  const folder = await targetFolder($, cwd)
-  if (folder === undefined) return undefined
+// Returns a path in the paste folder for the clipboard image that no file
+// has, or undefined when the folder is not available.
+async function clipboardTarget($, pasteDir, requestedName) {
+  if (!(await preparePasteDir($, pasteDir))) return undefined
   let name = requestedName.replace(/[\/\\]/g, '-') || 'clipboard-' + timestamp()
   if (!/\.png$/i.test(name)) name += '.png'
   const { stem, ext } = splitName(name)
-  let relative = folder + name
-  for (let n = 1; n < 100 && (await $.fs.exists(cwd + relative)); n++) relative = folder + stem + '-' + n + ext
-  return relative
+  let target = pasteDir + name
+  for (let n = 1; n < 100 && (await $.fs.exists(target)); n++) target = pasteDir + stem + '-' + n + ext
+  return target
 }
 
 // Saves the clipboard image of the origin. Returns the text for the prompt,
 // or undefined when the origin has no image or is not available.
-async function saveOriginClipboard($, cwd, origin, requestedName) {
-  const relative = await clipboardTarget($, cwd, requestedName)
-  if (relative === undefined) return undefined
-  const got = await askOrigin($, origin, 'clipboard', cwd + relative)
-  if (got !== undefined && got.exitCode === 0) return quotePath('./' + relative)
-  await $.process.run(['rm', '-f', cwd + relative])
+async function saveOriginClipboard($, pasteDir, origin, requestedName) {
+  const target = await clipboardTarget($, pasteDir, requestedName)
+  if (target === undefined) return undefined
+  const got = await askOrigin($, origin, 'clipboard', target)
+  if (got !== undefined && got.exitCode === 0) return quotePath(target)
+  await $.process.run(['rm', '-f', target])
   return undefined
 }
 
@@ -272,7 +295,7 @@ const CLIPBOARD_FILES_SCRIPT = [
   'return out',
 ]
 
-// Returns the paths of the files on the clipboard. In an SSH session, that
+// Returns the paths of the files on the clipboard. On a remote host, that
 // is the clipboard of the origin. If not, it is the clipboard of this
 // computer (macOS).
 async function clipboardFiles($, origin, platform) {
@@ -285,9 +308,9 @@ async function clipboardFiles($, origin, platform) {
 
 // Saves the clipboard image of this computer (macOS). Returns the text for
 // the prompt, or undefined when the clipboard has no image.
-async function saveLocalImage($, cwd, requestedName) {
-  const relative = await clipboardTarget($, cwd, requestedName)
-  if (relative === undefined) return undefined
+async function saveLocalImage($, pasteDir, requestedName) {
+  const target = await clipboardTarget($, pasteDir, requestedName)
+  if (target === undefined) return undefined
   const saved = await $.process.run([
     'osascript',
     '-e', 'on run argv',
@@ -297,9 +320,9 @@ async function saveLocalImage($, cwd, requestedName) {
     '-e', 'write png to f',
     '-e', 'close access f',
     '-e', 'end run',
-    cwd + relative,
+    target,
   ])
-  return saved.exitCode === 0 ? quotePath('./' + relative) : undefined
+  return saved.exitCode === 0 ? quotePath(target) : undefined
 }
 
 export function register(on) {
@@ -314,7 +337,7 @@ export function register(on) {
     try {
       await $.command.register({
         name: 'paste-file',
-        description: 'Put the file or the image that is on the clipboard in the working directory, and its path in the prompt',
+        description: 'Put the file or the image that is on the clipboard in the paste folder, and its path in the prompt',
         argumentHint: '[name for an image]',
         immediate: true,
       })
@@ -327,21 +350,22 @@ export function register(on) {
   // The clipboard can hold files (copied in Finder) or an image (a
   // screenshot). Files have priority.
   on('command.run', { command: 'paste-file' }, async ($, e) => {
-    const { origin } = await readEnvironment($)
+    const { origin, pasteDir } = await readEnvironment($)
     const { platform } = await $.session.info()
     if (origin === '' && platform !== 'macos') return { text: '/paste-file needs macOS, or a remote host that has the paste-origin host in ~/.ssh/config. Run origin/setup.sh on your computer.' }
+    if (pasteDir === '') return { text: 'The paste folder is not available. Make sure that the temporary folder (TMPDIR or /tmp) is writable.' }
     const cwd = await workingDirectory($)
     const pasted = []
     const notes = []
     for (const path of await clipboardFiles($, origin, platform)) {
-      const placed = origin !== '' ? await fetchFromOrigin($, cwd, origin, path) : await placePath($, cwd, '', path)
+      const placed = origin !== '' ? await fetchFromOrigin($, pasteDir, origin, path) : await placePath($, cwd, pasteDir, '', path)
       if (placed && placed.changed) pasted.push(quotePath(placed.text))
-      else if (placed && placed.refused) notes.push('Not copied: the folder of ' + path + ' is not in ~/.paste-here/allowed_dirs on your computer.')
+      else if (placed && placed.refused) notes.push('Not copied: the folder of ' + path + ' is not in ~/.claude-paste-file/allowed_dirs on your computer.')
       else notes.push('Not copied: ' + path + ' is a folder, is too large, or cannot be read.')
     }
     if (pasted.length === 0 && notes.length === 0) {
       const name = e.args.trim()
-      const image = origin !== '' ? await saveOriginClipboard($, cwd, origin, name) : await saveLocalImage($, cwd, name)
+      const image = origin !== '' ? await saveOriginClipboard($, pasteDir, origin, name) : await saveLocalImage($, pasteDir, name)
       if (image !== undefined) pasted.push(image)
     }
     if (pasted.length === 0) {

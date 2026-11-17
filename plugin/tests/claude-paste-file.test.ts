@@ -35,16 +35,16 @@ const stubEngine = (on: any, runs: string[][], exists: () => boolean = () => fal
   on('fs.exists', () => ({ value: exists() }))
   on('process.run', (_: unknown, e: any) => {
     runs.push([...e.argv])
-    return { value: { exitCode: e.argv[0] === 'cmp' ? 1 : 0, stdout: e.argv[0] === 'sh' && e.argv.length === 3 ? '/Users/x\n\n0\n' : '', stderr: '' } }
+    return { value: { exitCode: e.argv[0] === 'cmp' ? 1 : 0, stdout: e.argv[0] === 'sh' && e.argv.length === 3 ? 'home=/Users/x\norigin=\nconfigured=0\ndir=/tmp/cpf\n' : '', stderr: '' } }
   })
 }
 
-test('a dragged file outside the working directory is copied and its path made relative', async ($, on) => {
+test('a dragged file outside the working directory is copied into the paste folder', async ($, on) => {
   const runs: string[][] = []
   stubEngine(on, runs)
   const box = await $.prompt.edit(edit('/tmp/shots/My\\ Shot.png '))
-  expect(box.text).toBe('see "./My Shot.png" ')
-  expect(runs.some(argv => argv[0] === 'cp' && argv[1] === '/tmp/shots/My Shot.png' && argv[2] === '/work/My Shot.png')).toBe(true)
+  expect(box.text).toBe('see "/tmp/cpf/My Shot.png" ')
+  expect(runs.some(argv => argv[0] === 'cp' && argv[1] === '/tmp/shots/My Shot.png' && argv[2] === '/tmp/cpf/My Shot.png')).toBe(true)
 })
 
 test('a different file with the same name stays, and the copy gets a number', async ($, on) => {
@@ -52,8 +52,8 @@ test('a different file with the same name stays, and the copy gets a number', as
   let asked = 0
   stubEngine(on, runs, () => asked++ === 0)
   const box = await $.prompt.edit(edit('/tmp/a.png'))
-  expect(box.text).toBe('see ./a-1.png')
-  expect(runs.some(argv => argv[0] === 'cp' && argv[2] === '/work/a-1.png')).toBe(true)
+  expect(box.text).toBe('see /tmp/cpf/a-1.png')
+  expect(runs.some(argv => argv[0] === 'cp' && argv[2] === '/tmp/cpf/a-1.png')).toBe(true)
 })
 
 test('a file inside the working directory is not copied', async ($, on) => {
@@ -89,7 +89,7 @@ const stubSsh = (on: any, runs: string[][], statAnswer: string) => {
   on('process.run', (_: unknown, e: any) => {
     runs.push([...e.argv])
     const request = e.argv[5] ?? ''
-    const stdout = e.argv.length === 3 ? '/home/dev\n\n1\n' : request.startsWith('stat ') ? statAnswer : ''
+    const stdout = e.argv.length === 3 ? 'home=/home/dev\norigin=\nconfigured=1\ndir=/tmp/cpf\n' : request.startsWith('stat ') ? statAnswer : ''
     return { value: { exitCode: 0, stdout, stderr: '' } }
   })
 }
@@ -98,11 +98,11 @@ test('in an SSH session, a dragged file comes from the origin', async ($, on) =>
   const runs: string[][] = []
   stubSsh(on, runs, 'file 10\n')
   const box = await $.prompt.edit(edit('/Users/me/Desktop/My\\ Shot.png '))
-  expect(box.text).toBe('see "./My Shot.png" ')
+  expect(box.text).toBe('see "/tmp/cpf/My Shot.png" ')
   const get = runs.find(argv => (argv[5] ?? '').startsWith('get '))
   expect(get?.[4]).toBe('paste-origin')
   expect(get?.[5]).toBe('get %2FUsers%2Fme%2FDesktop%2FMy%20Shot.png')
-  expect(runs.some(argv => argv[0] === 'mv' && argv[1] === get?.[6] && argv[2] === '/work/My Shot.png')).toBe(true)
+  expect(runs.some(argv => argv[0] === 'mv' && argv[1] === get?.[6] && argv[2] === '/tmp/cpf/My Shot.png')).toBe(true)
 })
 
 test('in an SSH session, a path that the origin does not have stays unchanged', async ($, on) => {
@@ -122,7 +122,7 @@ const stubCommand = (on: any, fills: string[], answers: Record<string, [number, 
   on('fs.stat', () => ({ value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: '/work' } }))
   on('fs.exists', () => ({ value: false }))
   on('process.run', (_: unknown, e: any) => {
-    if (e.argv.length === 3) return { value: { exitCode: 0, stdout: '/home/dev\n\n1\n', stderr: '' } }
+    if (e.argv.length === 3) return { value: { exitCode: 0, stdout: 'home=/home/dev\norigin=\nconfigured=1\ndir=/tmp/cpf\n', stderr: '' } }
     const verb = (e.argv[5] ?? '').split(' ')[0]
     const [exitCode, stdout] = e.argv[0] === 'sh' ? answers[verb] ?? [1, ''] : [0, '']
     return { value: { exitCode, stdout, stderr: '' } }
@@ -133,7 +133,7 @@ test('/paste-file gets the files that are on the clipboard of the origin', async
   const fills: string[] = []
   stubCommand(on, fills, { 'clipboard-files': [0, '/Users/me/Desktop/a.pdf\n/Users/me/.ssh/id_ed25519\n'], stat: [0, 'file 10\n'], get: [0, ''] })
   const answer = await $.command.run({ command: 'paste-file', args: '' })
-  expect(fills).toEqual(['./a.pdf ./id_ed25519 '])
+  expect(fills).toEqual(['/tmp/cpf/a.pdf /tmp/cpf/id_ed25519 '])
   expect(answer.text).toBe(undefined)
 })
 
@@ -149,7 +149,7 @@ test('/paste-file gets the clipboard image when the clipboard has no file', asyn
   const fills: string[] = []
   stubCommand(on, fills, { 'clipboard-files': [1, ''], clipboard: [0, ''] })
   await $.command.run({ command: 'paste-file', args: 'diagram' })
-  expect(fills).toEqual(['./diagram.png '])
+  expect(fills).toEqual(['/tmp/cpf/diagram.png '])
 })
 
 test('/paste-file tells when the clipboard has no file and no image', async ($, on) => {

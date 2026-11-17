@@ -1,6 +1,0 @@
-{
-  "description": "The paste-here hooks module",
-  "modules": [
-    "./register.js"
-  ]
-}

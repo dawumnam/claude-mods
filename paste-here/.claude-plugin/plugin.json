@@ -1,5 +1,0 @@
-{
-  "name": "paste-here",
-  "version": "0.1.0",
-  "description": "Copies a pasted or dragged file into the working directory and puts the relative path in the prompt. Adds /paste-file for a file or an image on the clipboard. Operates over SSH."
-}

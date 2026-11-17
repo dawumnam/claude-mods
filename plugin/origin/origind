@@ -1,5 +1,5 @@
 #!/bin/bash
-# paste-here origin daemon: an SSH server of your own user, for the paste-here
+# claude-paste-file origin daemon: an SSH server of your own user, for the claude-paste-file
 # mod on a remote host. It needs no administrator rights and no system setting.
 #
 #   origind start [port]   starts the server and the clipboard agent if they
@@ -8,17 +8,17 @@
 #   origind status         tells if the two run
 #
 # The server listens on 127.0.0.1 only. It accepts the keys in
-# ~/.paste-here/authorized_keys only, and each connection can run serve.sh
-# only: it reads files in the folders of ~/.paste-here/allowed_dirs and the
+# ~/.claude-paste-file/authorized_keys only, and each connection can run serve.sh
+# only: it reads files in the folders of ~/.claude-paste-file/allowed_dirs and the
 # clipboard image, and it gives no shell.
 #
 # A connection of the server cannot read the macOS clipboard. The clipboard
 # agent can, because it starts from your terminal. serve.sh asks the agent
-# for the image through the pipe ~/.paste-here/clip.req.
+# for the image through the pipe ~/.claude-paste-file/clip.req.
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
-dir=${PASTE_HERE_HOME:-$HOME/.paste-here}
+dir=${CLAUDE_PASTE_FILE_HOME:-$HOME/.claude-paste-file}
 
 alive() {
   [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null
@@ -32,11 +32,11 @@ case ${1:-status} in
     # add or remove a folder. Each line is a real path.
     [ -f "$dir/allowed_dirs" ] || printf '%s\n' "$HOME/Desktop" "$HOME/Downloads" "$HOME/Documents" "$HOME/Pictures" /private/var/folders /private/tmp > "$dir/allowed_dirs"
     if ! alive "$dir/agent.pid"; then
-      PASTE_HERE_HOME=$dir nohup "$here/origind" agent >/dev/null 2>&1 &
+      CLAUDE_PASTE_FILE_HOME=$dir nohup "$here/origind" agent >/dev/null 2>&1 &
     fi
     alive "$dir/sshd.pid" && exit 0
     sshd=$(command -v sshd || echo /usr/sbin/sshd)
-    [ -f "$dir/host_key" ] || ssh-keygen -q -t ed25519 -N "" -C paste-here-origin -f "$dir/host_key" || exit 1
+    [ -f "$dir/host_key" ] || ssh-keygen -q -t ed25519 -N "" -C claude-paste-file-origin -f "$dir/host_key" || exit 1
     touch "$dir/authorized_keys" && chmod 600 "$dir/authorized_keys"
     cat > "$dir/sshd_config" <<EOF
 Port $port
@@ -55,7 +55,7 @@ AllowAgentForwarding no
 X11Forwarding no
 PermitTTY no
 EOF
-    "$sshd" -f "$dir/sshd_config" -E "$dir/sshd.log" || { echo "paste-here: the origin server did not start. See $dir/sshd.log" >&2; exit 1; }
+    "$sshd" -f "$dir/sshd_config" -E "$dir/sshd.log" || { echo "claude-paste-file: the origin server did not start. See $dir/sshd.log" >&2; exit 1; }
     ;;
   agent)
     request=$dir/clip.req

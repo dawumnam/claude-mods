@@ -1,0 +1,6 @@
+{
+  "description": "The claude-paste-file hooks module",
+  "modules": [
+    "./register.js"
+  ]
+}

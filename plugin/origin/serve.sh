@@ -1,5 +1,5 @@
 #!/bin/bash
-# paste-here origin: answers the requests of the paste-here mod.
+# claude-paste-file origin: answers the requests of the claude-paste-file mod.
 #
 # This script runs on the computer that has your terminal. The origin server
 # (see origind) runs it as the forced command of each connection, so a
@@ -7,13 +7,13 @@
 #   stat <path>   prints "dir", "file <bytes>", "missing" or "refused"
 #   get <path>    writes the content of the file
 # stat and get refuse a file that is not in a folder of the allow list,
-# ~/.paste-here/allowed_dirs.
+# ~/.claude-paste-file/allowed_dirs.
 #   clipboard        writes the clipboard image as a PNG (macOS)
 #   clipboard-files  prints the path of each file on the clipboard (macOS)
 # The path is percent-encoded.
 set -u
 
-dir=${1:-${PASTE_HERE_HOME:-$HOME/.paste-here}}
+dir=${1:-${CLAUDE_PASTE_FILE_HOME:-$HOME/.claude-paste-file}}
 request=${SSH_ORIGINAL_COMMAND:-}
 verb=${request%% *}
 encoded=""
@@ -21,14 +21,14 @@ encoded=""
 
 case $encoded in
   *[!A-Za-z0-9%._~-]* | *%00*)
-    echo "paste-here: the path is not percent-encoded" >&2
+    echo "claude-paste-file: the path is not percent-encoded" >&2
     exit 2
     ;;
 esac
 path=$(printf '%b' "${encoded//%/\\x}")
 
 # Sets 'real' to the real path of the file. Returns 0 only when that path is
-# in a folder of the allow list (~/.paste-here/allowed_dirs). A symbolic link
+# in a folder of the allow list (~/.claude-paste-file/allowed_dirs). A symbolic link
 # that goes out of those folders is refused, because the real path is used.
 allowed() {
   local line
@@ -47,7 +47,7 @@ allowed() {
 ask_agent() {
   local pipe=$dir/clip.req writer n=0
   if ! { [ -p "$pipe" ] && [ -f "$dir/agent.pid" ] && kill -0 "$(cat "$dir/agent.pid")" 2>/dev/null; }; then
-    echo "paste-here: the clipboard agent does not run" >&2
+    echo "claude-paste-file: the clipboard agent does not run" >&2
     return 1
   fi
   out=$dir/clip-$$.$1
@@ -87,7 +87,7 @@ case $verb in
     cat "$out"
     ;;
   *)
-    echo "paste-here: unknown request" >&2
+    echo "claude-paste-file: unknown request" >&2
     exit 2
     ;;
 esac
